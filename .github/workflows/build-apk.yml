@@ -144,7 +144,48 @@ jobs:
           else:
               print("PERINGATAN: icon-onodiano.png tidak ditemukan di root repositori.")
           PYEOF
+      - name: Cegah konflik duplicate class Kotlin stdlib
+        run: |
+          python3 - << 'PYEOF'
+          from pathlib import Path
 
+          # 1. Paksa resolusi kotlin-stdlib konsisten di semua subproject Android
+          root_gradle = Path("android/build.gradle")
+          if root_gradle.exists():
+              txt = root_gradle.read_text(encoding="utf-8")
+              resolution_block = """
+          allprojects {
+              configurations.all {
+                  resolutionStrategy {
+                      force 'org.jetbrains.kotlin:kotlin-stdlib:1.8.22'
+                      force 'org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.8.22'
+                      force 'org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.8.22'
+                  }
+              }
+          }
+          """
+              if "resolutionStrategy" not in txt:
+                  txt = txt + "\n" + resolution_block
+                  root_gradle.write_text(txt, encoding="utf-8")
+
+          # 2. Cegah duplikasi modul lama kotlin-stdlib-jdk7 & jdk8 di app/build.gradle
+          app_gradle = Path("android/app/build.gradle")
+          if app_gradle.exists():
+              atxt = app_gradle.read_text(encoding="utf-8")
+              exclude_block = """
+          configurations.all {
+              exclude group: 'org.jetbrains.kotlin', module: 'kotlin-stdlib-jdk7'
+              exclude group: 'org.jetbrains.kotlin', module: 'kotlin-stdlib-jdk8'
+          }
+          """
+              if "module: 'kotlin-stdlib-jdk8'" not in atxt:
+                  atxt = atxt + "\n" + exclude_block
+                  app_gradle.write_text(atxt, encoding="utf-8")
+          PYEOF
+
+      - name: Compile Debug APK
+        working-directory: android
+        run: chmod +x gradlew && ./gradlew assembleDebug
       - name: Compile Debug APK
         working-directory: android
         run: chmod +x gradlew && ./gradlew assembleDebug
