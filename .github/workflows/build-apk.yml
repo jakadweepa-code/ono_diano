@@ -1,0 +1,161 @@
+name: Build APK Offline Ono_Diano
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Setup Java (JDK 21)
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "21"
+
+      - name: Siapkan folder web offline (www)
+        run: |
+          mkdir -p www
+          cp index.html www/
+          cp calon_1.jpg www/
+          cp calon_2.jpg www/
+          cp -r assets css js data www/ 2>/dev/null || true
+
+      - name: Inisialisasi Capacitor & proyek Android
+        run: |
+          npm init -y
+          npm install @capacitor/core @capacitor/cli @capacitor/android
+          npx cap init "Ono Diano" "com.jakadweepa.onodiano" --web-dir www
+          npx cap add android
+          npx cap copy android
+
+      - name: Konfigurasi izin kamera, nama app, & ikon Ono_Diano
+        run: |
+          python3 -m pip install --break-system-packages Pillow
+          python3 - << 'PYEOF'
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+          from PIL import Image
+
+          # 1. Tambah permission CAMERA di AndroidManifest.xml
+          manifest = Path("android/app/src/main/AndroidManifest.xml")
+          ET.register_namespace("android", "http://schemas.android.com/apk/res/android")
+          tree = ET.parse(manifest)
+          root = tree.getroot()
+          ns = {"android": "http://schemas.android.com/apk/res/android"}
+          cam_perm = "android.permission.CAMERA"
+          exists = any(
+              elem.attrib.get("{http://schemas.android.com/apk/res/android}name") == cam_perm
+              for elem in root.findall("uses-permission", ns)
+          )
+          if not exists:
+              perm_elem = ET.Element("uses-permission", {"android:name": cam_perm})
+              root.insert(0, perm_elem)
+              tree.write(manifest, encoding="utf-8", xml_declaration=True)
+
+          # 2. Ubah app_name di strings.xml menjadi Ono Diano
+          strings_xml = Path("android/app/src/main/res/values/strings.xml")
+          if strings_xml.exists():
+              s_tree = ET.parse(strings_xml)
+              s_root = s_tree.getroot()
+              for item in s_root.findall("string"):
+                  if item.attrib.get("name") in ("app_name", "title_activity_main", "package_name"):
+                      item.text = "Ono Diano"
+              s_tree.write(strings_xml, encoding="utf-8", xml_declaration=True)
+
+          # 3. Pastikan applicationId & namespace memakai com.jakadweepa.onodiano
+          build_gradle = Path("android/app/build.gradle")
+          if build_gradle.exists():
+              gradle_txt = build_gradle.read_text(encoding="utf-8")
+              gradle_txt = gradle_txt.replace("com.jakadweepa.kds02", "com.jakadweepa.onodiano")
+              build_gradle.write_text(gradle_txt, encoding="utf-8")
+
+          # 4. Tulis MainActivity.java di package baru com.jakadweepa.onodiano
+          main_java = Path("android/app/src/main/java/com/jakadweepa/onodiano/MainActivity.java")
+          main_java.parent.mkdir(parents=True, exist_ok=True)
+          main_java.write_text("""package com.jakadweepa.onodiano;
+
+          import android.Manifest;
+          import android.content.pm.PackageManager;
+          import android.os.Bundle;
+          import android.webkit.PermissionRequest;
+          import android.webkit.WebChromeClient;
+          import androidx.core.app.ActivityCompat;
+          import androidx.core.content.ContextCompat;
+          import com.getcapacitor.BridgeActivity;
+
+          public class MainActivity extends BridgeActivity {
+              @Override
+              public void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+
+                  if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+                      ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.CAMERA}, 1001);
+                  }
+
+                  if (this.bridge != null && this.bridge.getWebView() != null) {
+                      this.bridge.getWebView().setWebChromeClient(new WebChromeClient() {
+                          @Override
+                          public void onPermissionRequest(final PermissionRequest request) {
+                              runOnUiThread(() -> request.grant(request.getResources()));
+                          }
+                      });
+                  }
+              }
+          }
+          """, encoding="utf-8")
+
+          # 5. Generate ikon tajam ke semua folder mipmap Android
+          icon_src = Path("icon-onodiano.png")
+          res_dir = Path("android/app/src/main/res")
+          sizes = {
+              "mipmap-mdpi": 48,
+              "mipmap-hdpi": 72,
+              "mipmap-xhdpi": 96,
+              "mipmap-xxhdpi": 144,
+              "mipmap-xxxhdpi": 192,
+          }
+
+          if icon_src.exists() and res_dir.exists():
+              for xml_file in res_dir.glob("mipmap*/ic_launcher*.xml"):
+                  xml_file.unlink(missing_ok=True)
+
+              base_img = Image.open(icon_src).convert("RGBA")
+              count = 0
+              for folder, px in sizes.items():
+                  target_dir = res_dir / folder
+                  if target_dir.exists():
+                      resized = base_img.resize((px, px), Image.Resampling.LANCZOS)
+                      for fname in ["ic_launcher.png", "ic_launcher_round.png", "ic_launcher_foreground.png"]:
+                          resized.save(target_dir / fname, format="PNG")
+                          count += 1
+              print(f"BERHASIL: {count} ikon Ono_Diano dibuat dari {icon_src}")
+          else:
+              print("PERINGATAN: icon-onodiano.png tidak ditemukan di root repositori.")
+          PYEOF
+
+      - name: Compile Debug APK
+        working-directory: android
+        run: chmod +x gradlew && ./gradlew assembleDebug
+
+      - name: Rename APK Ono_Diano
+        run: |
+          mkdir -p dist-apk
+          cp android/app/build/outputs/apk/debug/app-debug.apk dist-apk/Ono_Diano.apk
+
+      - name: Upload hasil APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: ono-diano-offline-apk
+          path: dist-apk/Ono_Diano.apk
